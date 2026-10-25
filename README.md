@@ -1,474 +1,392 @@
 # PARSE — Process, Analysis, Retrieval, Synthesis & Evaluation
 
-A modular data and decision-support platform for metallurgical operations and technical analysis.
+PARSE is a modular data and decision-support platform for metallurgical and
+related industrial operations. It brings together local technical-document
+retrieval, structured dataset analysis, and department-specific machine-learning
+(ML) predictions. It is intended to help developers, researchers, and technical
+users explore available evidence and datasets; it is a prototype, not an
+industrial control system.
 
-PARSE provides:
-- 📥 **Data Ingestion** — stage text or tabular sources, analyse and review datasets, then explicitly register them
-- 🔍 **RAG Chat** — query metallurgical `.txt` documents with a local LLM
-- 🧮 **ML Predictor** — estimate softening (Ts) and melting (Tm, Tm−Ts) temperatures from burden chemistry, gas atmosphere, and burden composition
-- 🤖 **Explainer LLM** — translate structured analysis findings into clear, natural language explanations with fidelity validation
-- 🏗️ **Core Contracts** — reusable Processing, Retrieval, Analysis, Synthesis, and Evaluation protocols for extensible workflows
+The Large Language Model (LLM) components explain retrieved or structured
+evidence. They are not the numerical prediction engine. Predictions come from
+separate trained ML artifacts and are limited by their training data and
+validation.
 
----
+## Key capabilities
 
-## Quick Start
+### Data processing and analysis
+
+- Stage `.txt`, `.csv`, `.xlsx`, `.xls`, `.json`, and `.jsonl` uploads for
+  review before explicit registration.
+- Run exploratory and structured analysis on registered tabular data. Cleaning
+  proposals require approval; the original upload is retained.
+- Store source metadata in a local SQLite catalogue and keep original and
+  normalized artifacts separately.
+- Index registered text documents for retrieval. Tabular registration does not
+  automatically make a dataset training data.
+
+### Technical information retrieval
+
+- Split the available technical text into topic- and section-labelled chunks,
+  embed them, and rank them with FAISS similarity search and section reranking.
+- Use Retrieval-Augmented Generation (RAG) to provide retrieved passages as
+  context to a local generation model.
+- Show retrieved source files separately from the generated answer in the UI
+  and CLI.
+
+The checked-in knowledge corpus is focused on blast-furnace topics. Retrieval
+only searches the available documents; it does not represent all metallurgical
+knowledge.
+
+### LLM-based explanation
+
+- Translate structured analysis findings and prediction results into
+  natural-language explanations.
+- Apply numerical, causal-language, limitation, recommendation, and
+  metric-semantics checks. When the model is disabled, unavailable, or fails
+  hard checks, the system uses a deterministic fallback.
+- The explainer is a presentation layer. It does not calculate predictions or
+  establish that a finding is scientifically correct.
+
+### Machine-learning prediction
+
+| Department | Prediction target | Inputs and scope |
+|---|---|---|
+| Blast furnace | Softening temperature (`Ts`), melting temperature (`Tm`), and `Tm-Ts` in °C | Chemistry plus optional gas-atmosphere, burden-mix, and test-type inputs |
+| Sintering | Sinter productivity in `T/m²-hr` | Eight prospective raw-mix chemistry and crushing-index features |
+| Energy | Contemporaneous `Usage_kWh` | Reactive-power, power-factor, time-of-day, and calendar/load-type inputs |
+
+The energy task estimates load for the supplied time interval; it is not a
+multi-step future forecast. The tasks use independent datasets and models;
+performance in one department does not establish performance in another.
+
+### Application interface
+
+- Streamlit UI with **RAG Chat**, **Predictor**, **Data Query**, and **Data
+  Ingestion** tabs.
+- A small command-line entry point for asking a question against the technical
+  document corpus.
+- Python modules for analysis, ingestion, retrieval, and department-specific
+  prediction.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U[Streamlit UI or CLI] --> Q[Question]
+    D[docs/*.txt and registered text] --> P[Section parser and chunker]
+    P --> E[Sentence embeddings and FAISS index]
+    Q --> R[Topic-aware retrieval and reranking]
+    E --> R
+    R --> C[Source-labelled context]
+    C --> G[Local RAG generation model]
+    G --> A[Answer with separately displayed sources]
+    T[Tabular uploads] --> I[Review, analysis, and registration]
+    I --> S[Local SQLite catalogue and normalized artifacts]
+    S --> X[Data Query and analysis]
+    M[Validated department inputs and local ML artifacts] --> N[UnifiedCalculator]
+    N --> O[Structured prediction result]
+    X --> Z[Optional ResultsTranslator]
+    O --> Z
+    Z --> U
+    A --> U
+```
+
+`ResultsTranslator` can explain structured results; the prediction models and
+RAG model remain separate from that explanation step.
+
+### Repository layout
+
+| Path | Responsibility |
+|---|---|
+| `app_web.py`, `main.py` | Streamlit interface and RAG CLI entry points |
+| `config/` | Repository-relative paths, model identifiers, and retrieval settings |
+| `data/`, `data_files/` | Checked-in sintering/energy datasets and the local blast-furnace workbook location |
+| `departments/` | Blast-furnace, sintering, and energy schemas and domain rules |
+| `docs/` | Checked-in blast-furnace technical corpus and experiment scenarios |
+| `eval/` | Retrieval, qualitative-scenario, and explanation-fidelity evaluation code and sets |
+| `llm/` | Local RAG model loading, prompts, and generation |
+| `ml/` | Training, prediction, parsing, and unified calculator logic |
+| `parse/` | Core contracts, ingestion/catalogue, analysis, cleaning, and explanation |
+| `pipeline/` | RAG and prediction orchestration |
+| `retrieval/` | Embeddings, FAISS index, filtering, and reranking |
+| `storage/` | Local source-catalogue and artifact layout documentation |
+| `tests/` | Unit and integration tests |
+| `MLModels/`, `LocalModels/`, `EmbedModels/` | Local model artifacts and weights; most are excluded from Git |
+
+## Technology stack
+
+Dependency ranges are declared in [`requirements.txt`](requirements.txt).
+
+| Area | Technologies |
+|---|---|
+| Language and UI | Python (the setup check requires Python 3.9+), Streamlit |
+| Data and analysis | NumPy, pandas, SciPy, openpyxl |
+| ML | scikit-learn, XGBoost; CatBoost is detected optionally by the BF training script |
+| LLM inference | PyTorch, Transformers; PEFT for the LoRA explainer adapter |
+| Retrieval | Sentence Transformers and `faiss-cpu` |
+| Tests | pytest |
+| Persistence and artifacts | SQLite, CSV/JSON, Excel, and local pickle/model files |
+
+## Prerequisites and installation
+
+The checked-in setup check accepts Python 3.9 or later. Python 3.13.14 was used
+for the verification recorded below; other versions and clean installations
+have not all been certified.
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+git clone https://github.com/Electro9109/BF.git
+cd BF
+python -m venv .venv
+```
 
-# 2. Check the local installation
+Activate the environment:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# macOS / Linux
+source .venv/bin/activate
+```
+
+Install the declared dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Local data and model artifacts
+
+Model weights and several datasets/artifacts are intentionally not stored in
+Git. A clone alone is therefore not a complete runtime installation.
+
+- **Blast-furnace training data:** place the workbook at
+  `data_files/data_result.xlsx`. The training loader expects the `Data Analysis `
+  worksheet (including the trailing space in its name) and reads headers from
+  row 2. Its source provenance is not recorded in the repository.
+- **Blast-furnace models:** `python -m ml.train` trains the BF targets and
+  writes model artifacts to `MLModels/`. Training requires the workbook above.
+- **Sintering and energy models:** the app expects
+  `MLModels/sinter_productivity_pipeline.pkl` and
+  `MLModels/steel_energy_pipeline.pkl`. The repository's BF training command
+  does not recreate these two artifacts.
+- **RAG generation model:** place a Transformers-compatible local checkpoint
+  in `LocalModels/`.
+- **Embedding model:** place compatible Sentence Transformers weights in
+  `EmbedModels/`, or ensure the configured model is already available in the
+  local Hugging Face cache. The RAG loader enforces offline Transformers
+  settings; do not rely on the app to download missing weights at startup.
+- **Optional explanation adapter:** the default adapter directory is
+  `parse/models/qwen3-explainer-v0.3/`. Its base model is
+  `Qwen/Qwen3-4B-Instruct-2507`; make it available in the local Hugging Face
+  cache or set a local base-model path as described under
+  [Configuration](#configuration).
+
+Most local artifacts above are Git-ignored. Obtain them from an authorized
+project source and verify that they are compatible with the code and each
+other. The `.xls` upload extension is accepted by the UI, but legacy Excel
+files may require an additional reader such as `xlrd`, which is not declared
+in `requirements.txt`.
+
+Run the optional layout and import check after preparing the required local
+assets:
+
+```bash
 python setup_check.py
+```
 
-# 3. Train ML models only if MLModels/ is empty or data/features changed
-python -m ml.train
+This check expects the BF workbook and model directories to exist; it does not
+download or generate missing files.
 
-# 4. Launch the UI
+## Running PARSE
+
+### Streamlit application
+
+```bash
 streamlit run app_web.py
 ```
 
-The verified prototype URL is `http://localhost:8501` when Streamlit uses its default port.
-The interface provides Data Ingestion, RAG Chat, and the Sinter predictor. Data Ingestion stages
-CSV/Excel, flat JSON/JSON Lines, or text uploads without adding them to the catalogue. Tabular inputs are analysed read-only,
-prioritize analyzer findings and applicable workflow suggestions, and display
-their existing supporting values. Validated plain-language explanations are primary, with source findings,
-statistics, and validation details kept available as secondary detail. Limitations and the controlled
-cleaning review remain available. The Cleaner never changes data until selected proposals are approved,
-preserves the original frame, and records before/after quality snapshots and value-level changes. The
-predictor can run with the trained local artifacts even when the local LLM is unavailable; RAG Chat and
-natural-language condition parsing require the files in `LocalModels/`.
+Streamlit normally prints the local URL, usually `http://localhost:8501`. The
+UI can display unavailable-model or index errors when local artifacts are
+missing; RAG, predictions, and explanations each have separate dependencies.
+The first index build embeds the available document corpus.
 
-For a lightweight command-line RAG check:
+### RAG command-line query
 
 ```bash
 python main.py "Explain sinter reducibility"
 ```
 
-The first UI launch builds the local document index and loads the local models. This can take
-several minutes on CPU and does not require network access.
+This loads the technical documents, builds the retrieval index, loads the
+local RAG model, prints an answer, and lists retrieved source files and scores.
+It requires usable documents, embedding weights, and a local generation model.
+It is not a general-purpose PARSE command-line interface.
 
-> **First launch is slow.** Loading the ~1.2 GB local LLM into memory on CPU can take
-> several minutes the first time. This is a one-time cost per session — subsequent
-> interactions are fast. A loading spinner is shown while this happens.
-
-## Source storage and catalogue
-
-The **Data Ingestion** tab accepts `.txt`, `.csv`, `.xlsx`, `.xls`, `.json`, and
-`.jsonl` files (up to 100 MiB) and registers them only after explicit confirmation.
-JSON datasets must be flat arrays of records or JSON Lines objects; nested values,
-duplicate keys, and malformed data are rejected. Excel input currently normalizes
-the first worksheet only. The uploaded workbook remains byte-for-byte intact, available sheet names are recorded, and
-additional sheets produce a visible warning. Validated CSV bytes remain
-byte-for-byte unchanged in the normalized artifact; Excel/JSON tables convert
-to CSV with the conversion recorded. TXT documents normalize to indexed text.
-
-Original bytes are retained separately. Exact duplicate checks use the SHA-256
-of the original bytes, not the filename, and then verify that the source type and
-classification are compatible. A mismatch is blocked with an explicit conflict;
-content-equivalence checks across differently formatted datasets are not implemented. The SQLite
-catalogue's `manifest_json` is the authoritative JSON representation of each
-`ResourceManifest`; it references, but does not embed, data artifacts. Processing
-stage and index failures remain distinct in manifest metadata. `SourceCatalogue.reconcile()`
-checks referenced originals and normalized artifacts against their hashes and
-reports inconsistencies without deleting files.
-
-Tabular registration does not imply analysis approval or suitability for ML
-training. The existing Data Ingestion review controls optional EDA and approved
-cleaning; originals are never modified, and derived selected datasets remain
-separate. Only normalized text documents are sent to the existing RAG index,
-and the UI marks them indexed only after verifying their chunks.
-
-- `storage/private/originals/` and `storage/public/originals/` retain categorized
-  original files locally.
-- `storage/catalogue/sources.sqlite3` stores compact resource manifests,
-  locations, issues, and artifact references; it does not store dataset rows.
-- `storage/normalized/` contains parsed text documents and normalized tabular
-  CSV artifacts. Registered text documents are included in the existing RAG index.
-- `storage/derived/` remains available for reproducible analysis outputs.
-
-The `parse.source_catalogue.SourceCatalogue` supports local files through
-`register_file()` and uploads through `register_upload()`. The guided UI uses
-`register_confirmed_upload()` after review and explicit approval. `find_duplicate()`
-provides a verified exact-duplicate preflight; `reconcile()` reports missing or
-hash-mismatched artifacts. The registry reuses PARSE `ResourceManifest`,
-`SourceRef`, `Provenance`, `Issue`, and `KnowledgeItem` contracts. Public/private
-folders are organizational classifications, not access controls. Runtime
-catalogue files are ignored by Git. Cloud storage, web crawling, permissions
-management, and automatic content-equivalence detection are not implemented.
-
----
-
-## Setup
-
-### Required files
-
-| Item | Where to place it |
-|---|---|
-| Metallurgical theory docs (`.txt`) | `docs/` — optional `TOPIC:` line; use `SECTION:` markers or supported Markdown/uppercase headings |
-| Sentence-embedding model weights | `EmbedModels/` — see [Embedding model](#changing-the-embedding-model) |
-| Chat / generation LLM weights | `LocalModels/` — see [Changing the LLM](#changing-the-llm) |
-| Raw experimental data | `data_files/data_result.xlsx` — sheet `Data Analysis` |
-
----
-
-## Changing the LLM
-
-The generation model drives both the RAG Chat answers and the natural-language condition parser.
-
-### Step 1 — Download the new model
-
-Download any Hugging Face `transformers`-compatible causal language model (e.g. Qwen2.5-1.5B-Instruct, Mistral-7B-Instruct, Phi-3-mini):
-
-```bash
-pip install huggingface-hub
-huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct --local-dir LocalModels/
-```
-
-Or copy the model folder manually. The folder must contain at minimum:
-```
-LocalModels/
-  config.json
-  tokenizer.json           (or tokenizer_config.json + vocab files)
-  model.safetensors        (or pytorch_model.bin / shards)
-```
-
-### Step 2 — Update `config/models.py`
-
-```python
-LLM_MODEL_NAME = "Qwen2.5-1.5B-Instruct"   # ← change to match your model folder
-```
-
-> This name is used only as a human-readable label (shown in the sidebar) — the actual
-> weights are always loaded from `LocalModels/` as set in `config/paths.py`.
-
-### Step 3 — (Optional) Update `config/paths.py`
-
-```python
-LLM_MODEL_DIR = "./LocalModels"   # ← change this path
-```
-
-### Step 4 — Adjust generation settings (optional)
-
-```python
-MAX_NEW_TOKENS         = 220   # max tokens the LLM generates per answer
-GENERATION_TEMPERATURE = 0.0   # 0.0 = deterministic; higher = more creative
-```
-
-### Step 5 — Restart the app
-
-```bash
-streamlit run app_web.py
-```
-
-The model is loaded once at startup and cached for the session.
-
-> **Note on model size**: Models larger than 3B parameters may be too slow on CPU.
-> Use `--device cuda` or a quantised (`GGUF`/`AWQ`) variant for larger models — this
-> also reduces the first-launch load time.
-
----
-
-## Changing the Embedding Model
-
-The embedding model turns document chunks into vectors for similarity search (RAG retrieval).
-
-### Step 1 — Place weights in `EmbedModels/`
-
-```
-EmbedModels/
-  config.json
-  tokenizer.json
-  model.safetensors
-  ...
-```
-
-If the folder is empty or absent, the app automatically downloads `all-MiniLM-L6-v2`
-from Hugging Face on first run.
-
-### Step 2 — Update `config/models.py`
-
-```python
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"   # ← change to match your model folder
-```
-
-> Changing the embedding model **invalidates** any cached FAISS index.
-> Click **Reload Documents** in the sidebar after restarting to rebuild it.
-
----
-
-## Feature Normalization
-
-All numeric input features are normalized using **fixed, domain-knowledge ranges**
-rather than ranges derived from the training data. This means:
-
-- A "T Fe %" of 60 always normalizes to the same value, regardless of what range
-  happens to appear in the current dataset — important since the ~132-row dataset
-  doesn't cover the full practical range of any feature.
-- Ranges are defined once in `departments/blast_furnace/feature_processing.py` as `CHEM_RANGES`,
-  `ATM_RANGES`, `BURDEN_RANGES`, and `INTERACTION_RANGES`, and applied via a
-  lightweight `RangeScaler` (min-max scaling: `(x - lo) / (hi - lo)`).
-- This replaced the previous `StandardScaler` (z-score) approach. For tree-based
-  models (Random Forest, XGBoost) this has **no effect on prediction accuracy** —
-  splits are scale-invariant — but it makes nearest-neighbour distance (used for the
-  confidence badge) and the parsed-condition preview consistent and interpretable
-  across runs.
-- `RangeScaler` does **not clip** — inputs outside the defined practical range will
-  normalize to values <0 or >1. This is intentional; combine with `Parser warnings`
-  (see below) if you want out-of-range inputs flagged to the user.
-
-If you add new features or change a chemistry/atmosphere/burden range, update the
-relevant `*_RANGES` dict in `departments/blast_furnace/feature_processing.py` and **retrain**
-(`python -m ml.train`) — old `.pkl` files in `MLModels/` are not compatible with a
-changed feature space.
-
----
-
-## Train the ML Models
+### Blast-furnace model training
 
 ```bash
 python -m ml.train
 ```
 
-- Reads `data_files/data_result.xlsx` (sheet `Data Analysis`, 132 valid rows after
-  dropping incomplete records)
-- Engineers features (see schema below) and runs `RandomizedSearchCV`
-  (n_iter = 25, cv = 5) for Random Forest and XGBoost, independently per target
-- Saves all models to `MLModels/` and writes cross-validation metrics to
-  `MLModels/benchmark_results.csv`
-- Auto-selects the best model per target (lowest RMSE)
+The command trains `Ts`, `Tm`, and `Tm-Ts` models from the local workbook,
+performs model selection and cross-validation, and writes benchmark and model
+artifacts under `MLModels/`. See `python -m ml.train --help` for target and
+feature options. It does not train the sintering or energy models.
 
-### Feature schema
+## Component usage
 
-| Group | Features | Count | Normalization |
-|---|---|---|---|
-| Chemistry | T Fe %, FeO %, SiO2 %, CaO %, Al2O3 %, MgO%, Basicity | 7 | `CHEM_RANGES` (fixed domain ranges) |
-| Atmosphere | CO_pct, H2_pct, N2_pct (parsed from string or NL input) | 3 | `ATM_RANGES` |
-| Burden | sinter_pct, ore_pct, pellet_pct, other_pct, num_components | 5 | `BURDEN_RANGES` |
-| Interactions | CO×Basicity, Reducibility Ratio = (CO+H2)/N2, Basicity×Sinter | 3 | `INTERACTION_RANGES` (derived from the above) |
-| Test type | type_SO, type_SOP, type_P (one-hot) | 3–5 | none |
+### LLM explanation layer
 
-### Current benchmark (5-fold CV, 132 samples)
+The Results Translator accepts a structured module result (for example,
+analysis findings or a prediction with metrics, limitations, and units) and
+returns an explanation. It checks numerical fidelity and related constraints;
+on disabled, unavailable, or invalid generation, it emits a deterministic
+evidence-preserving fallback. It should not be treated as a numerical
+calculator or as a guarantee that the underlying analysis is valid.
 
-| Target | Best model | MAE | RMSE | R² |
-|---|---|---|---|---|
-| Ts | Random Forest | ~46 °C | ~58 °C | ~0.64 |
-| Tm | Random Forest | ~36 °C | ~44 °C | ~0.35 |
-| Tm-Ts | Random Forest | ~46 °C | ~57 °C | ~0.51 |
+The optional finding explainer uses a Qwen3 base model with a LoRA adapter.
+`parse/explainer_llm.py` resolves its local paths through the environment
+variables documented below. This component is distinct from the RAG model in
+`LocalModels/`.
 
-> Tm R² is limited by the small dataset and high scatter. Adding more experimental rows
-> is the most effective way to improve it. Normalization scheme does not materially
-> change these metrics for tree-based models.
+### RAG technical assistant
 
----
+The document loader reads `.txt` files under `docs/` and registered normalized
+text documents. It extracts topics and sections into chunks. The embedder
+prefers `EmbedModels/`, configured as `all-MiniLM-L6-v2`; retrieval uses
+normalized embeddings with FAISS inner-product search, topic filtering, and
+section reranking. The default result count is five.
 
-## Retrained Multi-Department ML Models & Unified Calculator
+The RAG pipeline places retrieved, source-labelled passages in the prompt. The
+UI and CLI expose retrieved sources separately. Retrieval scores are ranking
+signals, not calibrated confidence. A lexical grounding guard is not an
+entailment check, and generated answers can still be incomplete or incorrect.
+Queries with no retrieved matches return a no-relevant-content response; the
+system does not guarantee that it can reliably classify every unanswerable
+question.
 
-PARSE includes verified, retrained models across three industrial departments:
+### ML prediction calculator
 
-### 1. Sintering Prospective Productivity
-- **Dataset**: `data/raw/sintering/SinterProductivityData.csv` (1,000 observations)
-- **Target**: `Sinter Productivity, T/m2-hr`
-- **Methodology & Leakage Prevention**: Excludes post-process finished sinter chemistry (`Sinter FeO %`, `Sinter CaO %`, etc.) and strength (`Drum Tumbling Index (DTI), %`), using strictly the 8 prospective raw mix chemistry and crushing granulometry features:
-  - `I/O Fines Total Fe %`, `I/O Fines SiO2 %`, `I/O Fines Al2O3 %`, `I/O Fines CaO %`, `Flux CaO %`, `Flux MgO %`, `Flux Crushing Index`, `Coke Crushing Index`
-- **Artifact**: `MLModels/sinter_productivity_pipeline.pkl`
-- **Held-Out 5-Fold Cross-Validation**:
-  - MAE: `0.051 T/m2-hr`
-  - RMSE: `0.0655 T/m2-hr`
-  - R²: `0.271`
+`ml/unified_calculator.py` loads task-specific pickle artifacts from
+`MLModels/`. Inputs are validated for missing or non-finite values, and range
+warnings are reported where available. For the blast-furnace workflow, gas
+conditions and burden mixtures can be supplied as structured values or parsed
+from user-entered conditions; the prediction UI displays the values sent to
+the model. Nearest-neighbour distance is a heuristic applicability indicator,
+not a calibrated probability.
 
-### 2. Steel Industry Energy Consumption
-- **Dataset**: `data/raw/energy/Steel_industry_data.csv` (35,040 15-minute observations)
-- **Target**: `Usage_kWh` (active electrical consumption)
-- **Methodology & Anomaly Consistency**: Contemporaneous active electrical demand estimation. Anomaly detection and recommendations are harmonized at the `80.0%` lagging power factor threshold, eliminating unsubstantiated utility penalty claims.
-- **Features**: Lagging and leading reactive power (kVarh), lagging and leading power factors (%), seconds from midnight (NSM), plus calendar and load-type indicators (`WeekStatus`, `Day_of_week`, `Load_Type`).
-- **Artifact**: `MLModels/steel_energy_pipeline.pkl`
-- **Chronological TimeSeriesSplit Evaluation (5 splits)**:
-  - MAE: `0.73 kWh`
-  - RMSE: `1.88 kWh`
-  - R²: `0.995`
+| Task | Training/evaluation record | Important limitation |
+|---|---|---|
+| Blast furnace | 132 complete rows; checked-in benchmark reports 5-fold shuffled K-fold scores after hyperparameter search | Experimental-data provenance is unknown; no independent held-out test set |
+| Sintering | 449 rows in the checked-in CSV; historical inventory reports 5-fold CV | Reported R² is 0.271; bed suction, bed depth, and moisture are not modeled |
+| Energy | 35,040 15-minute records in the checked-in CSV; historical inventory reports 5-split chronological `TimeSeriesSplit` | Estimates contemporaneous whole-facility usage, not future load |
 
-### 3. Unified Calculator & Results Translator Integration
-- **Unified Engine**: `ml/unified_calculator.py` (`UnifiedCalculator`) coordinates model loading, input range verification, and structured predictions across Blast Furnace, Sintering, and Energy departments.
-- **Results Translator Gate**: When predictions are generated in the Streamlit calculator (`app_web.py`), the structured output is passed directly to `ResultsTranslator.translate()` with strict numerical fidelity, sign preservation, unit fidelity, and causal language checks. Explanations failing validation are safely replaced with deterministic, evidence-preserving fallbacks.
+The historical benchmark values currently recorded in the repository are:
 
----
+| Task/target | Model | MAE | RMSE | R² |
+|---|---|---:|---:|---:|
+| BF `Ts` | Random Forest | 45.80 °C | 58.49 °C | 0.636 |
+| BF `Tm` | CatBoost | 35.12 °C | 43.09 °C | 0.377 |
+| BF `Tm-Ts` | CatBoost | 44.23 °C | 56.26 °C | 0.520 |
+| Sinter productivity | Random Forest pipeline | 0.051 T/m²-hr | 0.0655 T/m²-hr | 0.271 |
+| Energy `Usage_kWh` | Random Forest pipeline | 0.73 kWh | 1.88 kWh | 0.995 |
 
-## Document Roles & Qualitative Experiment Evaluation
+BF values are from [`MLModels/benchmark_results.csv`](MLModels/benchmark_results.csv);
+sintering and energy figures are historical values documented in
+[`ML_CALCULATOR_INVENTORY.md`](ML_CALCULATOR_INVENTORY.md). They are not fresh
+model evaluations from the verification run below. The BF training code tunes
+hyperparameters before its separate shuffled cross-validation scoring, so the
+reported scores are not an independent test-set estimate.
 
-PARSE maintains a clear distinction between **Reference Knowledge** (established principles, definitions, operating ranges) and **Experiment Scenarios** (qualitative hypotheses, trial conditions, conditional tradeoffs).
+## Configuration
 
-### 1. Document Roles and Provenance
-- Header convention: Documents in `docs/` can specify `ROLE: reference` or `ROLE: experiment_scenario` in the first 10 lines. Files in `docs/experiments/` default to `experiment_scenario`.
-- The chunking pipeline (`data.loader` and `data.schemas`) attaches `role` to every chunk.
-- Scenarios in `docs/experiments/experiment_scenarios.txt` are preserved as first-class qualitative context and are parsed into distinct section headers (`scenario 1: baseline case...` through `scenario 8: 100% pellet...`).
+There are no general path environment variables: repository paths are resolved
+relative to `config/paths.py`. Retrieval and RAG generation defaults are
+defined in `config/retrieval.py` and `config/models.py`.
 
-### 2. Controlled Ingestion Pilot: Coke Quality
-- **File**: `docs/coke_quality.txt` (Role: `reference`, 3,245 bytes, SHA-256: `a230740a43131c0fc5533cdacd86110bea0ec9cb025aac36ade874bcaf60e87e`).
-- **Subject**: CRI (Coke Reactivity Index), CSR (Coke Strength after Reaction), solution loss (Boudouard reaction), and permeability preservation across the blast furnace cohesive zone.
-- **Verification**: Verified top-rank retrieval on distinctive query (*"What is Coke Strength after Reaction CSR and Coke Reactivity Index CRI?"* -> Rank 1: `coke_quality.txt`, score=0.741). Zero regression on the 22-question retrieval baseline (MRR=0.650, Hit@5=0.900).
+| Variable | Default | Purpose |
+|---|---|---|
+| `PARSE_EXPLAINER_ENABLED` | Enabled (`1`) | Set to `0`, `false`, `no`, or `off` to disable the finding explainer and use fallback text |
+| `PARSE_BASE_MODEL_PATH` | Hugging Face model ID `Qwen/Qwen3-4B-Instruct-2507` | Optional path to a local directory containing the explainer base model |
+| `PARSE_ADAPTER_PATH` | `parse/models/qwen3-explainer-v0.3/` | Optional path to the LoRA adapter directory |
 
-### 3. Qualitative Scenario Evaluation Harness
-- **Dataset**: `eval/qualitative_scenario_eval_set.json` (9 benchmark cases categorized into `verified`, `conditional`, and `unresolved`).
-- **Harness**: `eval/qualitative_eval.py` (`python -m eval.qualitative_eval`).
-- **Evaluated Dimensions**:
-  - Eligible verified directional accuracy (100% on 6 eligible verified cases).
-  - Target variable coverage (mean 1.0).
-  - Required concept & mechanism coverage (mean 0.88).
-  - Caveat & uncertainty recognition (mean 1.0).
-  - Scenario-specific retrieval hit rate (66.7%).
+The RAG generation checkpoint is loaded from `LocalModels/`; its human-readable
+identifier and generation settings are in `config/models.py`. The embedding
+identifier and model path are configured in `config/models.py` and
+`config/paths.py`. The source catalogue defaults to
+`storage/catalogue/sources.sqlite3`; originals and normalized files are stored
+under `storage/`.
 
----
+## Testing and evaluation
 
-## Explainer LLM
+Run the automated suite from the repository root:
 
-The Explainer translates structured analysis findings into clear, natural language explanations.
-
-### Configuration
-
-- **Base Model:** `Qwen/Qwen3-4B-Instruct-2507` (configurable via `PARSE_BASE_MODEL_PATH`)
-- **Adapter:** LoRA adapter at `parse/models/qwen3-explainer-v0.3`
-- **Enable/Disable:** Set `PARSE_EXPLAINER_ENABLED=0` to force fallback mode
-
-### Fidelity Validation
-
-Every generated explanation is validated against:
-- **Numerical fidelity:** All numbers in the source finding must appear unchanged
-- **Causal language:** Observational findings must not be presented as causal
-- **Limitation preservation:** Statistical caveats must survive translation
-- **Recommendation fidelity:** Tentative recommendations must not be strengthened to mandatory
-
-If validation fails, the system returns the original finding message as a deterministic fallback.
-
-### Usage
-
-```python
-from parse import ExplainerSynthesizer, FidelityEvaluator, AnalysisOrchestrator, AnalysisRequest
-from parse.core.contracts import SourceRef
-
-# Run analysis
-source = SourceRef("test", "user_input")
-request = AnalysisRequest(dataset, source)
-analysis = AnalysisOrchestrator().analyze(request)
-
-# Generate explanations
-synthesizer = ExplainerSynthesizer()
-synthesis = synthesizer.synthesize(evidence=None, analyses=[analysis])
-
-# Validate fidelity
-evaluator = FidelityEvaluator()
-evaluation = evaluator.evaluate(target=synthesis, analyses=[analysis])
+```bash
+python -m pytest -q
 ```
 
----
+Additional checks:
 
-## Predictor Features
+```bash
+python setup_check.py
+python -m eval.retrieval_eval
+```
 
-| Feature | Description |
+Verification on **2026-10-25**, Windows, Python 3.13.14:
+
+| Command | Result |
 |---|---|
-| **Natural language input** | Describe conditions in plain English — hybrid regex+LLM parser extracts numbers automatically |
-| **Manual string input** | Paste raw atmosphere (`CO=40% & N2=60%`) and burden (`S1-70%+O1-30%`) strings directly |
-| **Confidence badge** | 🟢 High / 🟡 Medium / 🔴 Low based on nearest-neighbour Euclidean distance to training data (computed on normalized features) |
-| **Parser warnings** | Auto-alerts when percentages don't sum to 100%, values are out of range, or CO < 30% |
-| **Parsed condition preview** | Expandable panel showing exact numeric values sent to the model |
-| **Consistency check** | Flags when predicted `Tm − Ts` deviates from `(Tm) − (Ts)` by more than 15 °C |
-| **Prediction history** | Last 10 runs with timestamps in a collapsible table |
+| `python -m pytest -q` | 432 passed in 88.26 seconds |
+| `python setup_check.py` | Passed: dependencies, local paths, BF workbook, and core imports were present |
+| `python -m eval.retrieval_eval` | 22 questions (20 answerable, 2 unanswerable), 18 documents and 149 chunks, including two locally registered text documents |
 
----
+The retrieval run reported Recall@1/3/5 of `0.475` / `0.742` / `0.817`,
+Hit@1/3/5 of `0.50` / `0.80` / `0.90`, and MRR `0.650`. Both unanswerable
+questions returned passages. This is a small manually labelled retrieval
+benchmark: it measures passage ranking, not generated-answer correctness,
+entailment, or safety. Latency is environment-specific. The test suite does
+not certify live generation quality or model accuracy.
 
-## Codebase Architecture
+The repository also includes separate qualitative-scenario and explanation
+fidelity evaluation tools under `eval/`; their source code and test coverage
+are not equivalent to a fresh evaluation of a live model.
 
-```
-├── app_web.py                    Streamlit UI (RAG Chat + Predictor tabs)
-├── config/
-│   ├── models.py                 LLM name, embed name, generation settings   ← change model here
-│   ├── paths.py                  All directory paths                          ← change folders here
-│   └── retrieval.py              Chunking strategy, TOP_K
-├── data/ & data_files/
-│   ├── loader.py, parser.py, schemas.py   Generic document ingestion (RAG-side)
-│   └── data_result.xlsx          Raw experimental dataset
-├── departments/blast_furnace/    Blast Furnace department: everything domain-specific
-│   ├── config.py                 ML_FEATURES / ML_TARGET
-│   ├── bf_experiment_schema.py   Historical experiment dataset schema
-│   ├── experiments_loader.py     Loads data_result.xlsx into ExperimentRow records
-│   ├── feature_processing.py     Feature engineering + RangeScaler normalization (chemistry/atmosphere/burden/interactions)
-│   └── department.py             BlastFurnaceDepartment (the Department protocol implementation)
-├── docs/                         Metallurgical theory .txt files (user-supplied)
-├── EmbedModels/                  Sentence-embedding weights (auto-downloaded)
-├── LocalModels/                  Generation LLM weights (user-supplied)
-├── MLModels/                     Trained ML model .pkl files + benchmark CSV
-├── ml/
-│   ├── condition_parser.py       Hybrid regex+LLM parser; normalisation & warnings
-│   ├── predictor.py              Single-sample & batch prediction; confidence scoring
-│   ├── similarity.py             Nearest-neighbour distance for confidence estimation
-│   └── train.py                  RandomizedSearchCV training; per-target model selection
-├── parse/                        PARSE Core: domain-agnostic analysis and synthesis
-│   ├── analysis.py               AnalysisOrchestrator, Finding, AttributeProfile
-│   ├── cleaning.py               DataCleaner, cleaning proposals
-│   ├── explainer_llm.py          Qwen Explainer model loader and inference
-│   ├── explainer_adapter.py      Converts findings to Explainer record format
-│   ├── explainer_synthesizer.py  Synthesizer protocol implementation
-│   ├── translator_prompt.py      Role & system prompt for PARSE Results Translator
-│   ├── translator_pipeline.py    Deterministic execution pipeline for module translation
-│   ├── domain_workflows.py       Analytical & predictive workflows for Sintering and Energy
-│   ├── fidelity_evaluator.py     Evaluator protocol implementation
-│   ├── core/                     Core contracts, translator contracts, and protocols
-│   └── semantic_analysis.py      Relevance and interpretation layer
-├── pipeline/
-│   ├── prediction_pipeline.py    Orchestrates feature build → predict → summary
-│   └── rag_pipeline.py           RAG retrieval + LLM answer generation
-├── departments/
-│   ├── blast_furnace/            BF softening-melting temperature schema & parsers
-│   ├── sintering/                Sinter plant productivity schema & domain ranges
-│   └── energy/                   Steel industry electrical energy consumption schema
-├── data/
-│   ├── raw/
-│   │   ├── sintering/            SinterProductivityData.csv
-│   │   └── energy/               Steel_industry_data.csv
-│   └── processed/                Model-ready transformed partitions
-├── retrieval/                    FAISS index, embeddings, chunk ranking
-└── llm/                          Offline LLM loader and generator wrapper
-```
+## Limitations and known issues
 
-**Repo layout rule:** `departments/<name>/` holds domain-specific schema,
-config, parsers, and feature ranges for operational units (Blast Furnace,
-Sintering, and Energy are currently implemented). `parse/`, `pipeline/`, `ml/`,
-`retrieval/`, and `llm/` are generic machinery that consumes a
-department's config rather than defining it. Analytical findings, predictions,
-and anomaly reports flow into `parse/core/translator_contract.py` and are
-explained via `parse/translator_pipeline.py`.
+- The checked-in technical corpus contains 16 blast-furnace-focused text
+  documents; the evaluation run also included two locally registered text
+  documents. It is not a broad metallurgy reference library.
+- The retrieval evaluation set is small. The current run returned content for
+  both of its unanswerable questions, and retrieval ranking does not validate
+  generated answers.
+- Generated language can hallucinate, omit context, or paraphrase evidence
+  incorrectly. Fidelity checks and fallback behavior reduce specific risks
+  but are not proof of correctness.
+- The BF dataset has 132 complete rows and unknown provenance; the reported
+  evaluation has no independent held-out test set. The sintering score is
+  modest, and the energy task is contemporaneous estimation rather than
+  forecasting.
+- The BF workbook and most trained model artifacts are local and Git-ignored.
+  A clean clone cannot reproduce all application workflows without obtaining
+  compatible data and artifacts.
+- The public/private storage folders are organizational classifications, not
+  access controls. Cloud storage, permissions management, web crawling, and
+  production deployment infrastructure are not implemented.
+- Local LLMs and indexes can require substantial memory and startup time.
 
----
+## Future work
 
-## Eight Validated Experiment Scenarios
+Potential future work, not current functionality, includes expanding and
+documenting the technical corpus and dataset provenance; evaluating models on
+representative held-out operating data; improving and calibrating
+applicability indicators; evaluating generated answers for factual support;
+and improving artifact reproducibility and deployment guidance.
 
-Used to validate the end-to-end pipeline (text description → parser → ML → prediction):
+## Contributing and license
 
-| # | CO % | H2 % | N2 % | Sinter % | Ore % | Pellet % | Expected trend |
-|---|---|---|---|---|---|---|---|
-| 1 | 40 | 0 | 60 | 70 | 30 | 0 | Baseline SO — reference point |
-| 2 | 30 | 0 | 70 | 70 | 30 | 0 | ↑ Ts — lower CO reducibility delays softening |
-| 3 | 40 | 8 | 52 | 70 | 30 | 0 | ↓ Ts — H2 reduces wüstite faster |
-| 4 | 36 | 4 | 60 | 65 | 25 | 10 | SOP mix — pellet fraction narrows Tm-Ts |
-| 5 | 40 | 0 | 60 | 100 | 0 | 0 | Pure sinter — narrow cohesive zone |
-| 6 | 40 | 0 | 60 | 0 | 0 | 100 | Pure pellet — wider Tm-Ts |
-| 7 | 34 | 6 | 60 | 60 | 40 | 0 | H2 + SO blend — moderate Tm drop |
-| 8 | 40 | 0 | 60 | 50 | 30 | 20 | SOP near-equal mix |
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause |
-|---|---|
-| `TypeError: build_features() got an unexpected keyword argument 'fit_scalers'` | `build_features` signature was edited but `load_and_build`/callers still pass `fit_scalers`/`scalers`. Keep these as accepted (unused) kwargs for backward compatibility. |
-| `ValueError: Shape of passed values is (N, X), indices imply (N, Y)` | A feature block's array wasn't appended to `parts` while its column names were still appended to `feature_names`. Check every block does both `parts.append(...)` and `feature_names += [...]`. |
-| Predict button does nothing — no error, no result | Check the terminal for a traceback caught by an inner `try/except` in `pipeline/prediction_pipeline.py` that may be returning empty `predictions`. Confirm `result_obj.predictions` actually contains `Ts`/`Tm`/`Tm-Ts` keys. |
-| `.pkl` predictions look wrong after changing `*_RANGES` | Re-run `python -m ml.train` — models trained on the old feature scale are incompatible with new ranges. |
-
----
-
-## Notes on Large Model Files
-
-`LocalModels/model.safetensors` (~1.2 GB) and `EmbedModels/model.safetensors` (~87 MB)
-exceed GitHub's 100 MB file size limit and are excluded via `.gitignore`.
-Copy them into the respective directories manually after cloning.
+Review the tests and existing module boundaries before proposing changes. No
+separate contribution guide or citation metadata is currently provided.
+PARSE is distributed under the [Apache License 2.0](LICENSE).
